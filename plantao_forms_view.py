@@ -142,18 +142,54 @@ def _match_column(df: pd.DataFrame, targets: Tuple[str, ...]) -> Optional[str]:
     return None
 
 
+def _secrets_mapping_to_dict(obj: Any) -> Dict[str, Any]:
+    """Converte bloco Streamlit secrets (dict-like / TOMLSection) em dict simples."""
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return dict(obj)
+    if hasattr(obj, "keys"):
+        return {str(k): obj[k] for k in obj.keys()}
+    return {}
+
+
+def _service_account_dict_from_gsheets_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Aceita o formato [connections.gsheets] do secrets.toml (st-gsheets-connection).
+    Exige private_key e client_email; força type=service_account para o gspread.
+    """
+    if not block.get("private_key") or not block.get("client_email"):
+        return None
+    data = dict(block)
+    data["type"] = "service_account"
+    return _normalize_service_account_dict(data)
+
+
 def _service_account_from_streamlit_secrets() -> Optional[Dict[str, Any]]:
     if not hasattr(st, "secrets"):
         return None
     try:
         s = st.secrets
         if "type" in s and str(s.get("type")) == "service_account":
-            return _normalize_service_account_dict(dict(s))
+            return _normalize_service_account_dict(_secrets_mapping_to_dict(s))
         for key in ("google_service_account", "gcp_service_account", "service_account", "gsheets"):
             if key in s:
-                block = s[key]
-                if hasattr(block, "keys") and block.get("type") == "service_account":
-                    return _normalize_service_account_dict(dict(block))
+                block = _secrets_mapping_to_dict(s[key])
+                if block.get("type") == "service_account" or (
+                    block.get("private_key") and block.get("client_email")
+                ):
+                    got = _service_account_dict_from_gsheets_block(block)
+                    if got is not None:
+                        return got
+        # secrets.toml: [connections.gsheets]
+        if "connections" in s:
+            conn = _secrets_mapping_to_dict(s["connections"])
+            for gs_key in ("gsheets", "google_sheets", "GSheets"):
+                if gs_key in conn:
+                    block = _secrets_mapping_to_dict(conn[gs_key])
+                    got = _service_account_dict_from_gsheets_block(block)
+                    if got is not None:
+                        return got
     except Exception:
         return None
     return None
@@ -563,8 +599,8 @@ def load_forms_responses() -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     client = _open_gspread_client()
     if client is None:
         return None, (
-            "Sem credenciais Google. Configure SIMULADOR_GSHEETS_JSON (ou B64), "
-            "credentials.json, ou no Streamlit Secrets um bloco service_account."
+            "Sem credenciais Google. Configure SIMULADOR_GSHEETS_JSON (ou B64), credentials.json, "
+            "ou no Streamlit Secrets: [connections.gsheets] (private_key, client_email, …) ou um bloco service_account na raiz."
         )
     try:
         sh = client.open_by_key(FORMS_SHEET_ID)
