@@ -694,6 +694,9 @@ def main() -> None:
         st.info("Nenhum registro na planilha.")
         st.stop()
 
+    dias_todos = sorted(df["_data"].dropna().unique())
+    d_plan_min, d_plan_max = dias_todos[0], dias_todos[-1]
+
     _pad, btn_col, _pad2 = st.columns([2, 1, 2])
     with btn_col:
         if st.button("Atualizar dados", use_container_width=True, key="plantao_atualizar"):
@@ -750,91 +753,104 @@ def main() -> None:
                 )
                 render_day_cards(_card_df_from_plantao_rows(outros), stacked=True)
 
-    # --- Semanal: por semana (segunda–domingo); mesmo estilo de cards por dia ---
+    # --- Semanal: intervalo livre (dia inicial → dia final), manhã | tarde por dia ---
     with tab_semanal:
-        semanas = sorted(df["_segunda_semana"].dropna().unique())
-        if not semanas:
-            st.warning("Sem dados na planilha para a visão semanal.")
-        else:
-            st.markdown(
-                f"<div style='text-align: center; margin: 0 0 0.5rem 0; font-family: Montserrat, sans-serif; font-weight: 800; font-size: 0.95rem; color: {COR_AZUL_ESC}; text-transform: uppercase; letter-spacing: 0.08em;'>Semana</div>",
-                unsafe_allow_html=True,
+        st.markdown(
+            f"<div style='text-align: center; margin: 0 0 0.5rem 0; font-family: Montserrat, sans-serif; font-weight: 800; font-size: 0.95rem; color: {COR_AZUL_ESC}; text-transform: uppercase; letter-spacing: 0.08em;'>Período</div>",
+            unsafe_allow_html=True,
+        )
+        c_ini, c_fim = st.columns(2)
+        with c_ini:
+            data_inicio_sem = st.date_input(
+                "Dia inicial",
+                value=d_plan_min,
+                key="plantao_sem_inicio",
+                help="Primeiro dia do intervalo (ex.: segunda dia 1). Pode cruzar várias semanas.",
             )
-            pick = st.selectbox(
-                "Escolha a semana do plantão",
-                options=semanas,
-                index=len(semanas) - 1,
-                format_func=lambda m: f"Semana {_format_week_label(m)}",
-                label_visibility="collapsed",
-                key="plantao_semana_select",
-            )
-            sub_w = df[df["_segunda_semana"] == pick].copy()
-            c_turno = CANON_COLS["turno"]
-            sub_w["_periodo"] = sub_w[c_turno].map(_turno_periodo_bucket)
-            st.markdown(
-                f"<div style='text-align: center; margin-bottom: 1rem;'><strong>Semana:</strong> {_format_week_label(pick)} · <strong>Registros:</strong> {len(sub_w)}</div>",
-                unsafe_allow_html=True,
+        with c_fim:
+            data_fim_sem = st.date_input(
+                "Dia final",
+                value=d_plan_max,
+                key="plantao_sem_fim",
+                help="Último dia do intervalo (ex.: domingo dia 17).",
             )
 
-            d0 = pick
-            for i in range(7):
-                d = d0 + dt.timedelta(days=i)
-                day_rows = sub_w[sub_w["_data"] == d]
-                titulo = f"Dia {_format_day(d)} — {_weekday_pt(d)}"
-                st.markdown(
-                    f'<div class="plantao-dia-section"><h3 class="plantao-dia-title">{html.escape(titulo)}</h3></div>',
-                    unsafe_allow_html=True,
-                )
-                if day_rows.empty:
-                    st.markdown("<div style='text-align: center; color: gray; margin-bottom: 2rem;'>Sem registros.</div>", unsafe_allow_html=True)
-                else:
-                    manha_d = day_rows[day_rows["_periodo"] == "manha"]
-                    tarde_d = day_rows[day_rows["_periodo"] == "tarde"]
-                    outros_d = day_rows[day_rows["_periodo"] == "outro"]
-                    col_m, col_t = st.columns(2)
-                    with col_m:
+        if data_inicio_sem > data_fim_sem:
+            st.warning("O dia inicial é depois do final — invertendo o intervalo.")
+            data_inicio_sem, data_fim_sem = data_fim_sem, data_inicio_sem
+
+        sub_w = df[(df["_data"] >= data_inicio_sem) & (df["_data"] <= data_fim_sem)].copy()
+        c_turno = CANON_COLS["turno"]
+        if not sub_w.empty:
+            sub_w["_periodo"] = sub_w[c_turno].map(_turno_periodo_bucket)
+
+        st.markdown(
+            f"<div style='text-align: center; margin-bottom: 1rem;'>"
+            f"<strong>Intervalo:</strong> {_format_day(data_inicio_sem)} — {_weekday_pt(data_inicio_sem)} "
+            f"a {_format_day(data_fim_sem)} — {_weekday_pt(data_fim_sem)} · "
+            f"<strong>Registros:</strong> {len(sub_w)}</div>",
+            unsafe_allow_html=True,
+        )
+
+        d_cur = data_inicio_sem
+        while d_cur <= data_fim_sem:
+            day_rows = sub_w[sub_w["_data"] == d_cur]
+            titulo = f"Dia {_format_day(d_cur)} — {_weekday_pt(d_cur)}"
+            st.markdown(
+                f'<div class="plantao-dia-section"><h3 class="plantao-dia-title">{html.escape(titulo)}</h3></div>',
+                unsafe_allow_html=True,
+            )
+            if day_rows.empty:
+                st.markdown("<div style='text-align: center; color: gray; margin-bottom: 2rem;'>Sem registros.</div>", unsafe_allow_html=True)
+            else:
+                manha_d = day_rows[day_rows["_periodo"] == "manha"]
+                tarde_d = day_rows[day_rows["_periodo"] == "tarde"]
+                outros_d = day_rows[day_rows["_periodo"] == "outro"]
+                col_m, col_t = st.columns(2)
+                with col_m:
+                    st.markdown(
+                        '<div class="plantao-dia-section plantao-subsec-turno">'
+                        '<h4 class="plantao-dia-title">Turno da manhã</h4></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if manha_d.empty:
                         st.markdown(
-                            '<div class="plantao-dia-section plantao-subsec-turno">'
-                            '<h4 class="plantao-dia-title">Turno da manhã</h4></div>',
+                            "<div style='text-align: center; color: gray; font-size: 0.85rem; margin-bottom: 1rem;'>"
+                            "Sem registros.</div>",
                             unsafe_allow_html=True,
                         )
-                        if manha_d.empty:
-                            st.markdown(
-                                "<div style='text-align: center; color: gray; font-size: 0.85rem; margin-bottom: 1rem;'>"
-                                "Sem registros.</div>",
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            render_day_cards(
-                                _card_df_from_plantao_rows(manha_d),
-                                stacked=True,
-                                stack_fill_column=True,
-                            )
-                    with col_t:
+                    else:
+                        render_day_cards(
+                            _card_df_from_plantao_rows(manha_d),
+                            stacked=True,
+                            stack_fill_column=True,
+                        )
+                with col_t:
+                    st.markdown(
+                        '<div class="plantao-dia-section plantao-subsec-turno">'
+                        '<h4 class="plantao-dia-title">Turno da tarde</h4></div>',
+                        unsafe_allow_html=True,
+                    )
+                    if tarde_d.empty:
                         st.markdown(
-                            '<div class="plantao-dia-section plantao-subsec-turno">'
-                            '<h4 class="plantao-dia-title">Turno da tarde</h4></div>',
+                            "<div style='text-align: center; color: gray; font-size: 0.85rem; margin-bottom: 1rem;'>"
+                            "Sem registros.</div>",
                             unsafe_allow_html=True,
                         )
-                        if tarde_d.empty:
-                            st.markdown(
-                                "<div style='text-align: center; color: gray; font-size: 0.85rem; margin-bottom: 1rem;'>"
-                                "Sem registros.</div>",
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            render_day_cards(
-                                _card_df_from_plantao_rows(tarde_d),
-                                stacked=True,
-                                stack_fill_column=True,
-                            )
-                    if not outros_d.empty:
-                        st.markdown(
-                            '<div class="plantao-dia-section plantao-subsec-turno">'
-                            '<h4 class="plantao-dia-title">Outros turnos</h4></div>',
-                            unsafe_allow_html=True,
+                    else:
+                        render_day_cards(
+                            _card_df_from_plantao_rows(tarde_d),
+                            stacked=True,
+                            stack_fill_column=True,
                         )
-                        render_day_cards(_card_df_from_plantao_rows(outros_d), stacked=True)
+                if not outros_d.empty:
+                    st.markdown(
+                        '<div class="plantao-dia-section plantao-subsec-turno">'
+                        '<h4 class="plantao-dia-title">Outros turnos</h4></div>',
+                        unsafe_allow_html=True,
+                    )
+                    render_day_cards(_card_df_from_plantao_rows(outros_d), stacked=True)
+            d_cur += dt.timedelta(days=1)
 
 
 if __name__ == "__main__":
