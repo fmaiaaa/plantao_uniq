@@ -9,24 +9,102 @@ Execução:
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime as dt
 import html
+import json
 import os
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
-from simulador_dv.config.constants import (
-    COR_AZUL_ESC,
-    COR_BORDA,
-    COR_TEXTO_MUTED,
-    COR_VERMELHO,
-    URL_FAVICON_RESERVA,
-)
-from simulador_dv.services.sistema_data import _credential_path, _normalize_service_account_dict, _service_account_info_from_env
+# --- Standalone: sem pacote simulador_dv (ex.: deploy Streamlit Cloud só com este ficheiro) ---
+URL_FAVICON_RESERVA = "https://direcional.com.br/wp-content/uploads/2021/04/cropped-favicon-direcional-32x32.png"
+COR_AZUL_ESC = "#002c5d"
+COR_VERMELHO = "#e30613"
+COR_BORDA = "#eef2f6"
+COR_TEXTO_MUTED = "#64748b"
+
+_PLANTAO_APP_ROOT = Path(__file__).resolve().parent
+
+
+def _normalize_service_account_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Corrige private_key quando o JSON tem \\n literal em vez de newlines reais."""
+    pk = data.get("private_key")
+    if isinstance(pk, str) and "\\n" in pk and pk.count("\n") < 3:
+        data = dict(data)
+        data["private_key"] = pk.replace("\\n", "\n")
+    return data
+
+
+def _parse_service_account_json_string(text: str) -> Optional[Dict[str, Any]]:
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("type") != "service_account":
+        return None
+    if not data.get("private_key") or not data.get("client_email"):
+        return None
+    return _normalize_service_account_dict(data)
+
+
+def _service_account_info_from_env() -> Optional[Dict[str, Any]]:
+    for key in ("SIMULADOR_GSHEETS_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON"):
+        raw = os.environ.get(key)
+        if not raw:
+            continue
+        parsed = _parse_service_account_json_string(str(raw))
+        if parsed is not None:
+            return parsed
+
+    b64 = os.environ.get("SIMULADOR_GSHEETS_JSON_B64") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
+    if b64:
+        try:
+            raw_b64 = re.sub(r"\s+", "", str(b64).strip())
+            decoded = base64.b64decode(raw_b64, validate=False)
+            text = decoded.decode("utf-8")
+            parsed = _parse_service_account_json_string(text)
+            if parsed is not None:
+                return parsed
+        except (binascii.Error, UnicodeDecodeError):
+            pass
+
+    for key in ("SIMULADOR_GSHEETS_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS"):
+        raw = os.environ.get(key)
+        if not raw:
+            continue
+        text = str(raw).strip()
+        if Path(text).is_file():
+            continue
+        if not text.startswith("{"):
+            continue
+        parsed = _parse_service_account_json_string(text)
+        if parsed is not None:
+            return parsed
+
+    return None
+
+
+def _credential_path() -> Optional[str]:
+    for p in (
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
+        os.environ.get("SIMULADOR_GSHEETS_CREDENTIALS"),
+        str(_PLANTAO_APP_ROOT / "credentials.json"),
+    ):
+        if p and Path(p).is_file():
+            return p
+    return None
 
 try:
     import gspread
