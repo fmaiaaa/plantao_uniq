@@ -547,8 +547,8 @@ def render_header() -> None:
         f"""
         <div class="plantao-header-wrap">
             <img class="plantao-header-logo" src="{URL_FAVICON_RESERVA}" alt="" />
-            <div class="plantao-title">Plantão — respostas do Form</div>
-            <div class="plantao-sub">Visualização apenas leitura (sem edição)</div>
+            <div class="plantao-title">Plantão UNIQ Condomínio Clube</div>
+            <div class="plantao-sub">Visualização de Escala</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -682,7 +682,7 @@ def load_forms_responses_cached() -> Tuple[Optional[pd.DataFrame], Optional[str]
 
 
 def main() -> None:
-    st.set_page_config(page_title="Plantão (Form)", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="Plantão UNIQ Condomínio Clube", layout="wide", initial_sidebar_state="collapsed")
     inject_plantao_layout_css()
     render_header()
 
