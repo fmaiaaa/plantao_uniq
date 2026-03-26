@@ -685,19 +685,50 @@ def load_forms_responses_cached() -> Tuple[Optional[pd.DataFrame], Optional[str]
 def _pdf_safe_str(val: Any) -> str:
     """Garante texto compatível com fontes PDF core (Latin-1)."""
     s = str(val if val is not None else "")
+    for bad, good in (
+        ("\u2014", "-"),  # em dash
+        ("\u2013", "-"),  # en dash
+        ("\u2010", "-"),
+        ("\u00a0", " "),
+    ):
+        s = s.replace(bad, good)
     try:
         return s.encode("latin-1").decode("latin-1")
     except UnicodeEncodeError:
         return s.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _format_data_cell_pdf(r: pd.Series) -> str:
-    d = r["_data"]
-    if isinstance(d, dt.datetime):
-        return pd.Timestamp(d).strftime("%d/%m/%Y")
-    if isinstance(d, dt.date):
-        return d.strftime("%d/%m/%Y")
-    return pd.Timestamp(d).strftime("%d/%m/%Y")
+def _week_days_from_monday(monday: dt.date) -> List[dt.date]:
+    return [monday + dt.timedelta(days=i) for i in range(7)]
+
+
+def _mondays_spanning_range(d0: dt.date, d1: dt.date):
+    """Cada segunda-feira cujo intervalo Seg–Dom intersecta [d0, d1]."""
+    m = _monday_of(d0)
+    end_m = _monday_of(d1)
+    while m <= end_m:
+        yield m
+        m += dt.timedelta(days=7)
+
+
+def _dia_header_pdf_celula(d: dt.date) -> str:
+    nomes = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+    return f"{nomes[d.weekday()]}\n{d.strftime('%d/%m/%Y')}"
+
+
+def _pdf_cell_nomes_turno(
+    sw: pd.DataFrame,
+    day: dt.date,
+    periodo: str,
+    d0: dt.date,
+    d1: dt.date,
+) -> str:
+    if day < d0 or day > d1:
+        return "-"
+    chunk = sw[(sw["_data"] == day) & (sw["_periodo"] == periodo)]
+    if chunk.empty:
+        return "-"
+    return "\n".join(_pdf_safe_str(x) for x in chunk[CANON_COLS["nome"]].astype(str).tolist())
 
 
 def build_plantao_periodo_pdf_bytes(
@@ -706,20 +737,19 @@ def build_plantao_periodo_pdf_bytes(
     data_fim: dt.date,
 ) -> bytes:
     """
-    PDF A4 com tabela do período (Data, Dia da semana, Turno, Nome, Carimbo).
-    Usa fpdf2: quebras de página automáticas e cabeçalho da tabela repetido.
+    PDF A4: uma tabela por semana (segunda a domingo), colunas por dia,
+    linhas Turno da manhã / Turno da tarde (e Outros se existir), com título da semana em célula mesclada.
     """
     from fpdf import FPDF
     from fpdf.fonts import FontFace
-    from fpdf.enums import Align, TableHeadingsDisplay, TableBordersLayout
+    from fpdf.enums import Align, TableBordersLayout
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=16)
     pdf.set_margins(10, 10, 10)
     pdf.add_page()
-
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 9, _pdf_safe_str("Plantão — respostas do Form"), ln=1, align="C")
+    pdf.cell(0, 9, _pdf_safe_str("Plantão - respostas do Form"), ln=1, align="C")
     pdf.set_font("Helvetica", "", 10)
     pdf.multi_cell(
         0,
@@ -741,46 +771,135 @@ def build_plantao_periodo_pdf_bytes(
         pdf.output(buf)
         return buf.getvalue()
 
-    col_widths = (28, 34, 32, 45, 48)
-    hs = FontFace(
+    sw = sub_w.copy()
+    if "_periodo" not in sw.columns:
+        sw["_periodo"] = sw[CANON_COLS["turno"]].map(_turno_periodo_bucket)
+
+    w_turno = 24.0
+    w_day = (190.0 - w_turno) / 7.0
+    col_widths = (w_turno,) + (w_day,) * 7
+
+    style_titulo_semana = FontFace(
+        family="Helvetica",
         emphasis="BOLD",
-        color=(255, 255, 255),
         fill_color=(0, 44, 93),
+        color=(255, 255, 255),
+        size_pt=10,
+    )
+    style_cab_dias = FontFace(
+        family="Helvetica",
+        emphasis="BOLD",
+        fill_color=(0, 60, 110),
+        color=(255, 255, 255),
+        size_pt=7.5,
+    )
+    style_label_manha = FontFace(
+        family="Helvetica",
+        emphasis="BOLD",
+        fill_color=(255, 236, 236),
+        color=(227, 6, 19),
         size_pt=9,
     )
-    sort_cols = ["_data", CANON_COLS["turno"], CANON_COLS["nome"]]
-    ordered = sub_w.sort_values(sort_cols, ascending=True)
+    style_label_tarde = FontFace(
+        family="Helvetica",
+        emphasis="BOLD",
+        fill_color=(232, 242, 252),
+        color=(0, 44, 93),
+        size_pt=9,
+    )
+    style_label_outros = FontFace(
+        family="Helvetica",
+        emphasis="BOLD",
+        fill_color=(255, 248, 230),
+        color=(100, 80, 0),
+        size_pt=9,
+    )
 
-    pdf.set_font("Helvetica", size=9)
-    with pdf.table(
-        col_widths=col_widths,
-        line_height=6,
-        first_row_as_headings=True,
-        repeat_headings=TableHeadingsDisplay.ON_TOP_OF_EVERY_PAGE,
-        headings_style=hs,
-        width=190,
-        text_align=Align.C,
-        borders_layout=TableBordersLayout.ALL,
-    ) as table:
-        table.row(
-            [
-                _pdf_safe_str("Data"),
-                _pdf_safe_str("Dia da semana"),
-                _pdf_safe_str("Turno"),
-                _pdf_safe_str("Nome"),
-                _pdf_safe_str("Carimbo"),
-            ]
-        )
-        for _, r in ordered.iterrows():
+    for monday in _mondays_spanning_range(data_inicio, data_fim):
+        if pdf.get_y() > 235:
+            pdf.add_page()
+            pdf.set_font("Helvetica", "", 10)
+
+        week_days = _week_days_from_monday(monday)
+        titulo_sem = _pdf_safe_str(f"Semana {_format_week_label(monday)} (segunda a domingo)")
+
+        with pdf.table(
+            col_widths=col_widths,
+            width=190,
+            line_height=5.8,
+            first_row_as_headings=False,
+            borders_layout=TableBordersLayout.ALL,
+            text_align=Align.C,
+        ) as table:
             table.row(
                 [
-                    _pdf_safe_str(_format_data_cell_pdf(r)),
-                    _pdf_safe_str(str(r["_dia_semana"]).strip().title()),
-                    _pdf_safe_str(r[CANON_COLS["turno"]]),
-                    _pdf_safe_str(r[CANON_COLS["nome"]]),
-                    _pdf_safe_str(r["carimbo_fmt"]),
+                    {
+                        "text": titulo_sem,
+                        "colspan": 8,
+                        "align": Align.C,
+                        "style": style_titulo_semana,
+                    }
                 ]
             )
+            cab = [_pdf_safe_str("Turno")]
+            for d in week_days:
+                cab.append(_pdf_safe_str(_dia_header_pdf_celula(d)))
+            table.row(cab, style=style_cab_dias)
+
+            linha_manha: List[Any] = [
+                {
+                    "text": _pdf_safe_str("Turno da manhã"),
+                    "style": style_label_manha,
+                    "align": Align.C,
+                }
+            ]
+            for d in week_days:
+                linha_manha.append(
+                    {
+                        "text": _pdf_cell_nomes_turno(sw, d, "manha", data_inicio, data_fim),
+                        "align": Align.C,
+                    }
+                )
+            table.row(linha_manha)
+
+            linha_tarde: List[Any] = [
+                {
+                    "text": _pdf_safe_str("Turno da tarde"),
+                    "style": style_label_tarde,
+                    "align": Align.C,
+                }
+            ]
+            for d in week_days:
+                linha_tarde.append(
+                    {
+                        "text": _pdf_cell_nomes_turno(sw, d, "tarde", data_inicio, data_fim),
+                        "align": Align.C,
+                    }
+                )
+            table.row(linha_tarde)
+
+            dias_sem = [d for d in week_days if data_inicio <= d <= data_fim]
+            tem_outros = not sw[
+                (sw["_data"].isin(dias_sem)) & (sw["_periodo"] == "outro")
+            ].empty
+            if tem_outros:
+                linha_out: List[Any] = [
+                    {
+                        "text": _pdf_safe_str("Outros turnos"),
+                        "style": style_label_outros,
+                        "align": Align.C,
+                    }
+                ]
+                for d in week_days:
+                    linha_out.append(
+                        {
+                            "text": _pdf_cell_nomes_turno(sw, d, "outro", data_inicio, data_fim),
+                            "align": Align.C,
+                        }
+                    )
+                table.row(linha_out)
+
+        pdf.ln(5)
 
     buf = BytesIO()
     pdf.output(buf)
