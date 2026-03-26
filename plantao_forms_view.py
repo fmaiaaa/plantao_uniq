@@ -711,9 +711,8 @@ def _mondays_spanning_range(d0: dt.date, d1: dt.date):
         m += dt.timedelta(days=7)
 
 
-def _dia_header_pdf_celula(d: dt.date) -> str:
-    nomes = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-    return f"{nomes[d.weekday()]}\n{d.strftime('%d/%m/%Y')}"
+# Cabeçalhos de coluna no PDF (Segunda = coluna 0 … Domingo = 6)
+NOMES_DIAS_PDF = ("Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo")
 
 
 def _pdf_cell_nomes_turno(
@@ -737,15 +736,15 @@ def build_plantao_periodo_pdf_bytes(
     data_fim: dt.date,
 ) -> bytes:
     """
-    PDF A4: uma tabela por semana (segunda a domingo), colunas por dia,
-    linhas Turno da manhã / Turno da tarde (e Outros se existir), com título da semana em célula mesclada.
+    PDF A4 horizontal: por semana (segunda a domingo), título "Semana de X a Y",
+    duas tabelas (manhã e tarde) na mesma página, colunas Segunda … Domingo.
     """
     from fpdf import FPDF
     from fpdf.fonts import FontFace
     from fpdf.enums import Align, TableBordersLayout
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=14)
     pdf.set_margins(10, 10, 10)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 14)
@@ -775,15 +774,29 @@ def build_plantao_periodo_pdf_bytes(
     if "_periodo" not in sw.columns:
         sw["_periodo"] = sw[CANON_COLS["turno"]].map(_turno_periodo_bucket)
 
-    w_turno = 24.0
-    w_day = (190.0 - w_turno) / 7.0
-    col_widths = (w_turno,) + (w_day,) * 7
+    page_w = float(pdf.epw)
+    w_col = page_w / 7.0
+    col_widths = (w_col,) * 7
 
-    style_titulo_semana = FontFace(
+    style_sec_manha = FontFace(
         family="Helvetica",
         emphasis="BOLD",
-        fill_color=(0, 44, 93),
-        color=(255, 255, 255),
+        fill_color=(255, 236, 236),
+        color=(227, 6, 19),
+        size_pt=10,
+    )
+    style_sec_tarde = FontFace(
+        family="Helvetica",
+        emphasis="BOLD",
+        fill_color=(232, 242, 252),
+        color=(0, 44, 93),
+        size_pt=10,
+    )
+    style_sec_outros = FontFace(
+        family="Helvetica",
+        emphasis="BOLD",
+        fill_color=(255, 248, 230),
+        color=(100, 80, 0),
         size_pt=10,
     )
     style_cab_dias = FontFace(
@@ -791,42 +804,21 @@ def build_plantao_periodo_pdf_bytes(
         emphasis="BOLD",
         fill_color=(0, 60, 110),
         color=(255, 255, 255),
-        size_pt=7.5,
-    )
-    style_label_manha = FontFace(
-        family="Helvetica",
-        emphasis="BOLD",
-        fill_color=(255, 236, 236),
-        color=(227, 6, 19),
-        size_pt=9,
-    )
-    style_label_tarde = FontFace(
-        family="Helvetica",
-        emphasis="BOLD",
-        fill_color=(232, 242, 252),
-        color=(0, 44, 93),
-        size_pt=9,
-    )
-    style_label_outros = FontFace(
-        family="Helvetica",
-        emphasis="BOLD",
-        fill_color=(255, 248, 230),
-        color=(100, 80, 0),
         size_pt=9,
     )
 
-    for monday in _mondays_spanning_range(data_inicio, data_fim):
-        if pdf.get_y() > 235:
-            pdf.add_page()
-            pdf.set_font("Helvetica", "", 10)
+    cab_nomes = [_pdf_safe_str(n) for n in NOMES_DIAS_PDF]
 
-        week_days = _week_days_from_monday(monday)
-        titulo_sem = _pdf_safe_str(f"Semana {_format_week_label(monday)} (segunda a domingo)")
-
+    def _render_tabela_turno(
+        titulo_secao: str,
+        periodo: str,
+        style_sec: FontFace,
+        days: List[dt.date],
+    ) -> None:
         with pdf.table(
             col_widths=col_widths,
-            width=190,
-            line_height=5.8,
+            width=page_w,
+            line_height=6.2,
             first_row_as_headings=False,
             borders_layout=TableBordersLayout.ALL,
             text_align=Align.C,
@@ -834,72 +826,50 @@ def build_plantao_periodo_pdf_bytes(
             table.row(
                 [
                     {
-                        "text": titulo_sem,
-                        "colspan": 8,
+                        "text": _pdf_safe_str(titulo_secao),
+                        "colspan": 7,
                         "align": Align.C,
-                        "style": style_titulo_semana,
+                        "style": style_sec,
                     }
                 ]
             )
-            cab = [_pdf_safe_str("Turno")]
-            for d in week_days:
-                cab.append(_pdf_safe_str(_dia_header_pdf_celula(d)))
-            table.row(cab, style=style_cab_dias)
-
-            linha_manha: List[Any] = [
+            table.row(cab_nomes, style=style_cab_dias)
+            linha_dados = [
                 {
-                    "text": _pdf_safe_str("Turno da manhã"),
-                    "style": style_label_manha,
+                    "text": _pdf_cell_nomes_turno(sw, d, periodo, data_inicio, data_fim),
                     "align": Align.C,
                 }
+                for d in days
             ]
-            for d in week_days:
-                linha_manha.append(
-                    {
-                        "text": _pdf_cell_nomes_turno(sw, d, "manha", data_inicio, data_fim),
-                        "align": Align.C,
-                    }
-                )
-            table.row(linha_manha)
+            table.row(linha_dados)
 
-            linha_tarde: List[Any] = [
-                {
-                    "text": _pdf_safe_str("Turno da tarde"),
-                    "style": style_label_tarde,
-                    "align": Align.C,
-                }
-            ]
-            for d in week_days:
-                linha_tarde.append(
-                    {
-                        "text": _pdf_cell_nomes_turno(sw, d, "tarde", data_inicio, data_fim),
-                        "align": Align.C,
-                    }
-                )
-            table.row(linha_tarde)
+    for monday in _mondays_spanning_range(data_inicio, data_fim):
+        sunday = monday + dt.timedelta(days=6)
+        # Espaço para título + 2 tabelas (+ opcional) na mesma página
+        if pdf.get_y() > 145:
+            pdf.add_page()
+            pdf.set_font("Helvetica", "", 10)
 
-            dias_sem = [d for d in week_days if data_inicio <= d <= data_fim]
-            tem_outros = not sw[
-                (sw["_data"].isin(dias_sem)) & (sw["_periodo"] == "outro")
-            ].empty
-            if tem_outros:
-                linha_out: List[Any] = [
-                    {
-                        "text": _pdf_safe_str("Outros turnos"),
-                        "style": style_label_outros,
-                        "align": Align.C,
-                    }
-                ]
-                for d in week_days:
-                    linha_out.append(
-                        {
-                            "text": _pdf_cell_nomes_turno(sw, d, "outro", data_inicio, data_fim),
-                            "align": Align.C,
-                        }
-                    )
-                table.row(linha_out)
+        week_days = _week_days_from_monday(monday)
+        titulo_sem = _pdf_safe_str(f"Semana de {_format_day(monday)} a {_format_day(sunday)}")
 
-        pdf.ln(5)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, titulo_sem, ln=1, align="C")
+        pdf.ln(3)
+
+        _render_tabela_turno("Turno da manhã", "manha", style_sec_manha, week_days)
+        pdf.ln(4)
+        _render_tabela_turno("Turno da tarde", "tarde", style_sec_tarde, week_days)
+
+        dias_sem = [d for d in week_days if data_inicio <= d <= data_fim]
+        tem_outros = not sw[
+            (sw["_data"].isin(dias_sem)) & (sw["_periodo"] == "outro")
+        ].empty
+        if tem_outros:
+            pdf.ln(4)
+            _render_tabela_turno("Outros turnos", "outro", style_sec_outros, week_days)
+
+        pdf.ln(6)
 
     buf = BytesIO()
     pdf.output(buf)
