@@ -834,8 +834,6 @@ def build_plantao_periodo_pdf_bytes(
         ),
         align="C",
     )
-    pdf.set_font("Helvetica", "", 9)
-    pdf.cell(0, 6, _pdf_safe_str(f"Total de registros: {len(sub_w)}"), ln=1, align="C")
     pdf.ln(3)
 
     if sub_w.empty:
@@ -1017,10 +1015,6 @@ def main() -> None:
                 )
             except ImportError:
                 st.caption("Instale **fpdf2** para exportar PDF (`pip install fpdf2`).")
-        st.caption(
-            f"PDF da semana de {_format_day(monday_sem)} a {_format_day(sunday_sem)} "
-            f"(segunda a domingo)."
-        )
 
         if sub_hoje.empty:
             st.markdown(
