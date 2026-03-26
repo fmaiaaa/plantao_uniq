@@ -17,6 +17,7 @@ import json
 import os
 import re
 import unicodedata
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -547,8 +548,8 @@ def render_header() -> None:
         f"""
         <div class="plantao-header-wrap">
             <img class="plantao-header-logo" src="{URL_FAVICON_RESERVA}" alt="" />
-            <div class="plantao-title">Plantão UNIQ Condomínio Clube</div>
-            <div class="plantao-sub">Visualização de Escala</div>
+            <div class="plantao-title">Plantão — respostas do Form</div>
+            <div class="plantao-sub">Visualização apenas leitura (sem edição)</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -681,8 +682,113 @@ def load_forms_responses_cached() -> Tuple[Optional[pd.DataFrame], Optional[str]
     return load_forms_responses()
 
 
+def _pdf_safe_str(val: Any) -> str:
+    """Garante texto compatível com fontes PDF core (Latin-1)."""
+    s = str(val if val is not None else "")
+    try:
+        return s.encode("latin-1").decode("latin-1")
+    except UnicodeEncodeError:
+        return s.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _format_data_cell_pdf(r: pd.Series) -> str:
+    d = r["_data"]
+    if isinstance(d, dt.datetime):
+        return pd.Timestamp(d).strftime("%d/%m/%Y")
+    if isinstance(d, dt.date):
+        return d.strftime("%d/%m/%Y")
+    return pd.Timestamp(d).strftime("%d/%m/%Y")
+
+
+def build_plantao_periodo_pdf_bytes(
+    sub_w: pd.DataFrame,
+    data_inicio: dt.date,
+    data_fim: dt.date,
+) -> bytes:
+    """
+    PDF A4 com tabela do período (Data, Dia da semana, Turno, Nome, Carimbo).
+    Usa fpdf2: quebras de página automáticas e cabeçalho da tabela repetido.
+    """
+    from fpdf import FPDF
+    from fpdf.fonts import FontFace
+    from fpdf.enums import Align, TableHeadingsDisplay, TableBordersLayout
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf.set_margins(10, 10, 10)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 9, _pdf_safe_str("Plantão — respostas do Form"), ln=1, align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.multi_cell(
+        0,
+        5.5,
+        _pdf_safe_str(
+            f"Intervalo: {_format_day(data_inicio)} ({_weekday_pt(data_inicio).title()}) "
+            f"a {_format_day(data_fim)} ({_weekday_pt(data_fim).title()})"
+        ),
+        align="C",
+    )
+    pdf.set_font("Helvetica", "", 9)
+    pdf.cell(0, 6, _pdf_safe_str(f"Total de registros: {len(sub_w)}"), ln=1, align="C")
+    pdf.ln(3)
+
+    if sub_w.empty:
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 7, _pdf_safe_str("Sem registros neste período."), align="C")
+        buf = BytesIO()
+        pdf.output(buf)
+        return buf.getvalue()
+
+    col_widths = (28, 34, 32, 45, 48)
+    hs = FontFace(
+        emphasis="BOLD",
+        color=(255, 255, 255),
+        fill_color=(0, 44, 93),
+        size_pt=9,
+    )
+    sort_cols = ["_data", CANON_COLS["turno"], CANON_COLS["nome"]]
+    ordered = sub_w.sort_values(sort_cols, ascending=True)
+
+    pdf.set_font("Helvetica", size=9)
+    with pdf.table(
+        col_widths=col_widths,
+        line_height=6,
+        first_row_as_headings=True,
+        repeat_headings=TableHeadingsDisplay.ON_TOP_OF_EVERY_PAGE,
+        headings_style=hs,
+        width=190,
+        text_align=Align.C,
+        borders_layout=TableBordersLayout.ALL,
+    ) as table:
+        table.row(
+            [
+                _pdf_safe_str("Data"),
+                _pdf_safe_str("Dia da semana"),
+                _pdf_safe_str("Turno"),
+                _pdf_safe_str("Nome"),
+                _pdf_safe_str("Carimbo"),
+            ]
+        )
+        for _, r in ordered.iterrows():
+            table.row(
+                [
+                    _pdf_safe_str(_format_data_cell_pdf(r)),
+                    _pdf_safe_str(str(r["_dia_semana"]).strip().title()),
+                    _pdf_safe_str(r[CANON_COLS["turno"]]),
+                    _pdf_safe_str(r[CANON_COLS["nome"]]),
+                    _pdf_safe_str(r["carimbo_fmt"]),
+                ]
+            )
+
+    buf = BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
 def main() -> None:
-    st.set_page_config(page_title="Plantão UNIQ Condomínio Clube", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="Plantão (Form)", layout="wide", initial_sidebar_state="collapsed")
     inject_plantao_layout_css()
     render_header()
 
@@ -791,6 +897,21 @@ def main() -> None:
             f"<strong>Registros:</strong> {len(sub_w)}</div>",
             unsafe_allow_html=True,
         )
+
+        _dl_l, _dl_c, _dl_r = st.columns([2, 1, 2])
+        with _dl_c:
+            try:
+                _pdf_bytes = build_plantao_periodo_pdf_bytes(sub_w, data_inicio_sem, data_fim_sem)
+                st.download_button(
+                    label="Baixar PDF do período",
+                    data=_pdf_bytes,
+                    file_name=f"plantao_{data_inicio_sem.isoformat()}_{data_fim_sem.isoformat()}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="plantao_pdf_periodo",
+                )
+            except ImportError:
+                st.caption("Instale **fpdf2** para exportar PDF (`pip install fpdf2`).")
 
         d_cur = data_inicio_sem
         while d_cur <= data_fim_sem:
