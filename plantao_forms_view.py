@@ -715,6 +715,17 @@ def _mondays_spanning_range(d0: dt.date, d1: dt.date):
 NOMES_DIAS_PDF = ("Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo")
 
 
+def _pdf_nome_uma_linha(nome: Any) -> str:
+    """
+    Um nome completo numa única linha na célula: evita quebra por espaços
+    (ex.: 'Lucas Felipe Santana Maia' não vira duas linhas no PDF).
+    Vários nomes na mesma célula continuam separados por newline em _pdf_cell_nomes_turno.
+    """
+    t = _pdf_safe_str(nome)
+    # NBSP: Latin-1; a tabela do fpdf2 não quebra linha no meio do nome.
+    return t.replace(" ", "\u00a0")
+
+
 def _pdf_cell_nomes_turno(
     sw: pd.DataFrame,
     day: dt.date,
@@ -727,7 +738,7 @@ def _pdf_cell_nomes_turno(
     chunk = sw[(sw["_data"] == day) & (sw["_periodo"] == periodo)]
     if chunk.empty:
         return "-"
-    return "\n".join(_pdf_safe_str(x) for x in chunk[CANON_COLS["nome"]].astype(str).tolist())
+    return "\n".join(_pdf_nome_uma_linha(x) for x in chunk[CANON_COLS["nome"]].astype(str).tolist())
 
 
 def build_plantao_periodo_pdf_bytes(
@@ -903,12 +914,38 @@ def main() -> None:
 
     # --- Diário: apenas plantão de hoje, uma caixa por linha ---
     with tab_diario:
+        monday_sem = _monday_of(hoje)
+        sunday_sem = monday_sem + dt.timedelta(days=6)
+        sub_semana = df[(df["_data"] >= monday_sem) & (df["_data"] <= sunday_sem)].copy()
+        c_turno_d = CANON_COLS["turno"]
+        if not sub_semana.empty:
+            sub_semana["_periodo"] = sub_semana[c_turno_d].map(_turno_periodo_bucket)
+
         sub_hoje = df[df["_data"] == hoje]
         titulo = f"Hoje — {_format_day(hoje)} — {_weekday_pt(hoje)}"
         st.markdown(
             f'<div class="plantao-dia-section"><h3 class="plantao-dia-title">{html.escape(titulo)}</h3></div>',
             unsafe_allow_html=True,
         )
+        _dl_d_l, _dl_d_c, _dl_d_r = st.columns([2, 1, 2])
+        with _dl_d_c:
+            try:
+                _pdf_sem_dia = build_plantao_periodo_pdf_bytes(sub_semana, monday_sem, sunday_sem)
+                st.download_button(
+                    label="Baixar PDF da semana",
+                    data=_pdf_sem_dia,
+                    file_name=f"plantao_semana_{monday_sem.isoformat()}_{sunday_sem.isoformat()}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="plantao_pdf_semana_diario",
+                )
+            except ImportError:
+                st.caption("Instale **fpdf2** para exportar PDF (`pip install fpdf2`).")
+        st.caption(
+            f"PDF da semana de {_format_day(monday_sem)} a {_format_day(sunday_sem)} "
+            f"(segunda a domingo)."
+        )
+
         if sub_hoje.empty:
             st.markdown(
                 "<div style='text-align: center; color: gray; margin-bottom: 2rem;'>"
