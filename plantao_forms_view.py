@@ -741,6 +741,58 @@ def _pdf_cell_nomes_turno(
     return "\n".join(_pdf_nome_uma_linha(x) for x in chunk[CANON_COLS["nome"]].astype(str).tolist())
 
 
+def _pdf_truncate_line_to_width(pdf: Any, line: str, max_w: float) -> str:
+    """Encurta com reticências para não ultrapassar max_w (largura já na fonte atual)."""
+    if not line or pdf.get_string_width(line) <= max_w:
+        return line
+    suf = "..."
+    for n in range(len(line), 0, -1):
+        if pdf.get_string_width(line[:n] + suf) <= max_w:
+            return line[:n] + suf
+    return suf if pdf.get_string_width(suf) <= max_w else ""
+
+
+def _pdf_fit_cell_nomes_text(
+    pdf: Any,
+    raw: str,
+    inner_w_mm: float,
+    base_pt: float = 9.0,
+    min_pt: float = 4.5,
+) -> tuple[str, float]:
+    """
+    Garante uma linha por nome na célula: reduz o tamanho da fonte até caber na largura;
+    se ainda não couber no mínimo, trunca com reticências (sem transbordo).
+    """
+    if raw == "-":
+        return raw, base_pt
+    lines = raw.split("\n")
+    # Margem interna para bordas da célula e arredondamentos do fpdf2
+    avail = max(3.5, float(inner_w_mm) - 1.0)
+    pdf.set_font("Helvetica", "", base_pt)
+    max_w_line = 0.0
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        max_w_line = max(max_w_line, pdf.get_string_width(line))
+    if max_w_line <= 0:
+        return raw, base_pt
+    pt = base_pt
+    if max_w_line > avail:
+        pt = max(min_pt, min(base_pt, base_pt * (avail / max_w_line)))
+    pdf.set_font("Helvetica", "", pt)
+    out_lines: List[str] = []
+    for line in lines:
+        if not line.strip():
+            out_lines.append(line)
+            continue
+        if pdf.get_string_width(line) <= avail:
+            out_lines.append(line)
+        else:
+            out_lines.append(_pdf_truncate_line_to_width(pdf, line, avail))
+    return "\n".join(out_lines), pt
+
+
 def build_plantao_periodo_pdf_bytes(
     sub_w: pd.DataFrame,
     data_inicio: dt.date,
@@ -752,7 +804,7 @@ def build_plantao_periodo_pdf_bytes(
     """
     from fpdf import FPDF
     from fpdf.fonts import FontFace
-    from fpdf.enums import Align, TableBordersLayout
+    from fpdf.enums import Align, TableBordersLayout, TextEmphasis, WrapMode
 
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=14)
@@ -820,6 +872,9 @@ def build_plantao_periodo_pdf_bytes(
 
     cab_nomes = [_pdf_safe_str(n) for n in NOMES_DIAS_PDF]
 
+    # Largura útil por coluna (7 dias) para encaixar texto numa linha sem transbordo
+    _inner_col_mm = max(8.0, w_col - 1.5)
+
     def _render_tabela_turno(
         titulo_secao: str,
         periodo: str,
@@ -833,6 +888,7 @@ def build_plantao_periodo_pdf_bytes(
             first_row_as_headings=False,
             borders_layout=TableBordersLayout.ALL,
             text_align=Align.C,
+            wrapmode=WrapMode.WORD,
         ) as table:
             table.row(
                 [
@@ -845,13 +901,21 @@ def build_plantao_periodo_pdf_bytes(
                 ]
             )
             table.row(cab_nomes, style=style_cab_dias)
-            linha_dados = [
-                {
-                    "text": _pdf_cell_nomes_turno(sw, d, periodo, data_inicio, data_fim),
-                    "align": Align.C,
-                }
-                for d in days
-            ]
+            linha_dados = []
+            for d in days:
+                raw = _pdf_cell_nomes_turno(sw, d, periodo, data_inicio, data_fim)
+                txt, pt = _pdf_fit_cell_nomes_text(pdf, raw, _inner_col_mm)
+                linha_dados.append(
+                    {
+                        "text": txt,
+                        "align": Align.C,
+                        "style": FontFace(
+                            family="Helvetica",
+                            emphasis=TextEmphasis.NONE,
+                            size_pt=pt,
+                        ),
+                    }
+                )
             table.row(linha_dados)
 
     for monday in _mondays_spanning_range(data_inicio, data_fim):
