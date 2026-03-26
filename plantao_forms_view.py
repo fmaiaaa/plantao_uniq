@@ -503,8 +503,13 @@ def inject_plantao_layout_css() -> None:
             margin: 0 auto 0.75rem auto;
             padding-bottom: 0.35rem;
             border-bottom: 2px solid {COR_VERMELHO};
-            display: inline-block;
+            display: block;
+            width: fit-content;
+            max-width: 100%;
+            margin-left: auto;
+            margin-right: auto;
             text-align: center;
+            box-sizing: border-box;
         }}
         [data-testid="stMarkdownContainer"] .plantao-dia-section {{
             margin-left: auto;
@@ -518,6 +523,13 @@ def inject_plantao_layout_css() -> None:
         .plantao-subsec-turno .plantao-dia-title {{
             font-size: 1.02rem;
             margin-bottom: 0.5rem;
+            margin-left: auto;
+            margin-right: auto;
+            text-align: center;
+        }}
+        .plantao-dia-section h3,
+        .plantao-dia-section h4 {{
+            text-align: center !important;
         }}
         div[data-baseweb="tab-list"] {{ justify-content: center !important; gap: 32px; margin-bottom: 24px; }}
         button[data-baseweb="tab"] p {{
@@ -548,8 +560,8 @@ def render_header() -> None:
         f"""
         <div class="plantao-header-wrap">
             <img class="plantao-header-logo" src="{URL_FAVICON_RESERVA}" alt="" />
-            <div class="plantao-title">Plantão — respostas do Form</div>
-            <div class="plantao-sub">Visualização apenas leitura (sem edição)</div>
+            <div class="plantao-title">Plantão</div>
+            <div class="plantao-sub">Visualização apenas leitura</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -811,7 +823,7 @@ def build_plantao_periodo_pdf_bytes(
     pdf.set_margins(10, 10, 10)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 9, _pdf_safe_str("Plantão - respostas do Form"), ln=1, align="C")
+    pdf.cell(0, 9, _pdf_safe_str("Plantão"), ln=1, align="C")
     pdf.set_font("Helvetica", "", 10)
     pdf.multi_cell(
         0,
@@ -952,7 +964,7 @@ def build_plantao_periodo_pdf_bytes(
 
 
 def main() -> None:
-    st.set_page_config(page_title="Plantão (Form)", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="Plantão", layout="wide", initial_sidebar_state="collapsed")
     inject_plantao_layout_css()
     render_header()
 
